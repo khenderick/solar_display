@@ -18,16 +18,18 @@ I flashed the Loboris MicroPython port for ESP32. Using the guide on https://git
 
 ### Configuration
 
-In the code (`monitor.py`) there's a few configuration variables:
-* `SOLAR_TOPIC`: The MQTT topic holding the realtime data for the solar feed
-* `GRID_TOPIC`: The MQTT topic holding the realtime data for the grid feed
-* `MQTT_ENDPOINT`: The MQTT broker endpoint (ip address from the emonPi)
-* `WIFI_CREDENTIALS`: A list holding the SSID and password
+Add a `config.json` JSON file in the project's root with following content:
+* `solar_topic`: The MQTT topic holding the realtime data for the solar feed
+* `grid_topic`: The MQTT topic holding the realtime data for the grid feed
+* `mqtt_broker`: The MQTT broker endpoint (ip address from the emonPi)
+* `wifi_credentials`: A list holding the SSID as first element, and the password as second
 
 ### Installation
 
 1. Copy the files over to the M5Stack and reset/reboot the device: `rshell --port /dev/ttyUSB0 rsync --mirror . /flash`
 2. Soft restart the M5Stack: Open the REPL with `screen /dev/ttyUSB0 115200` and soft restart with `CTRL+D`
+
+Tip: You can exit the screen by pressing `CTRL+A`, then `k` and then `y`.
 
 ### License
 

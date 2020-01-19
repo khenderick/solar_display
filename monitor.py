@@ -6,13 +6,13 @@ from ip5306 import IP5306
 
 
 class Monitor(object):
-    
-    SOLAR_TOPIC = ''
-    GRID_TOPIC = ''
-    MQTT_ENDPOINT = ''
-    WIFI_CREDENTIALS = ['ssid', 'password']
 
-    def __init__(self):
+    def __init__(self, solar_topic, grid_topic, mqtt_broker, wifi_credentials):
+        self._solar_topic = solar_topic
+        self._grid_topic = grid_topic
+        self._mqtt_broker = mqtt_broker
+        self._wifi_credentials = wifi_credentials
+
         self._tft = None
         self._wlan = None
         self._mqtt = None
@@ -49,14 +49,14 @@ class Monitor(object):
         print('Connecting to wifi...')
         self._wlan = network.WLAN(network.STA_IF)
         self._wlan.active(True)
-        self._wlan.connect(*Monitor.WIFI_CREDENTIALS)
+        self._wlan.connect(*self._wifi_credentials)
         while not self._wlan.isconnected():
             time.sleep(1)
         print('Connecting to wifi... Done')
         print('Connecting to MQTT...')
         if self._mqtt is not None:
             self._mqtt.unsubscribe('emon/#')
-        self._mqtt = network.mqtt('emon', Monitor.MQTT_ENDPOINT, user='emonpi', password='emonpimqtt2016', data_cb=self._process_data)
+        self._mqtt = network.mqtt('emon', self._mqtt_broker, user='emonpi', password='emonpimqtt2016', data_cb=self._process_data)
         self._mqtt.start()
         self._mqtt.subscribe('emon/#')
         print('Connecting to MQTT... Done')
@@ -68,16 +68,16 @@ class Monitor(object):
     def _process_data(self, message):
         topic = message[1]
         data = float(message[2])
-        if topic == Monitor.SOLAR_TOPIC:
+        if topic == self._solar_topic:
             self._solar = data
-        elif topic == Monitor.GRID_TOPIC:
+        elif topic == self._grid_topic:
             self._grid = data
         if self._solar is not None and self._grid is not None:
             self._usage = self._solar + self._grid
             self._last_update = self._rtc.now()
             self._realtime_updated = True
 
-        if topic == Monitor.GRID_TOPIC and self._usage is not None:
+        if topic == self._grid_topic and self._usage is not None:
             now = time.time()
             if self._last_value_added < (now - now % 60):
                 self._solar_buffer.append(self._solar)
