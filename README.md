@@ -19,26 +19,36 @@ I flashed the Loboris MicroPython port for ESP32. Using the guide on https://git
 ### Configuration
 
 Add a `config.json` JSON file in the project's root with following content:
-* `solar_topic`: The MQTT topic holding the realtime data for the solar feed
-* `grid_topic`: The MQTT topic holding the realtime data for the grid feed
-* `mqtt_broker`: The MQTT broker endpoint (ip address from the emonPi)
-* `wifi_credentials`: A list holding the SSID as first element, and the password as second
+* `solar_topic`: The MQTT topic holding the realtime data for the solar feed;
+* `grid_topic`: The MQTT topic holding the realtime data for the grid feed;
+* `mqtt_broker`: The MQTT broker endpoint (ip address from the emonPi);
+* `wifi_credentials`: A list holding the SSID as first element, and the password as second.
+
+Optionally, following parameters can also be specified:
+* `update_interval_ms`: How frequent (in ms) the display must be updated;
+* `graph_interval_s`: How frequent (in s) the graph needs to be updated.
+
+Top: A graph interval of `270` seconds is just enough for exactly 24h of data.
 
 ### Installation
 
-1. Copy the files over to the M5Stack and reset/reboot the device: `rshell --port /dev/ttyUSB0 rsync --mirror . /flash`
-2. Soft restart the M5Stack: Open the REPL with `screen /dev/ttyUSB0 115200` and soft restart with `CTRL+D`
+1. Copy the files over to the M5Stack and reset/reboot the device: `rshell --port /dev/ttyUSB0 rsync --mirror . /flash`.
+2. Soft restart the M5Stack: Open the REPL with `screen /dev/ttyUSB0 115200` and soft restart with `CTRL+D`.
 
 Tip: You can exit the screen by pressing `CTRL+A`, then `k` and then `y`.
 
+### Debugging
+
+When the REPL is open, do a soft restart and watch the debug output. It might give a clue about what's going on.
+
 ### License
 
-All code is licensed under MIT except for files stating differently
+All code is licensed under MIT except for files stating differently.
 
 ### Notices
 
 This project uses and/or relies on following software:
-* Loboris ESP32 MicroPython fork
-* Mika Tuupola's IP5306 I2C driver
+* Loboris ESP32 MicroPython fork;
+* Mika Tuupola's IP5306 I2C driver.
 
-Let me know if I miss anything
+Let me know if I miss anything.

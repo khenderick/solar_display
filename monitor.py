@@ -7,11 +7,18 @@ from ip5306 import IP5306
 
 class Monitor(object):
 
-    def __init__(self, solar_topic, grid_topic, mqtt_broker, wifi_credentials):
+    def __init__(
+        self, 
+        solar_topic, grid_topic, mqtt_broker, wifi_credentials,
+        graph_interval_s=60, update_interval_ms=1000
+    ):
         self._solar_topic = solar_topic
         self._grid_topic = grid_topic
         self._mqtt_broker = mqtt_broker
         self._wifi_credentials = wifi_credentials
+        self._graph_interval = graph_interval_s
+        self._update_interval = update_interval_ms
+        self._graph_window = Monitor._shorten(self._graph_interval * 320)
 
         self._tft = None
         self._wlan = None
@@ -33,7 +40,7 @@ class Monitor(object):
         self._realtime_updated = False
         self._last_value_added = 0
 
-        print('Initializing TFT...')
+        self._log('Initializing TFT...')
         self._tft = display.TFT()
         self._tft.init(self._tft.M5STACK, width=240, height=320, rst_pin=33, backl_pin=32, miso=19, mosi=23, clk=18, cs=14, dc=27, bgr=True, backl_on=1)
         self._tft.tft_writecmd(0x21)  # Invert colors
@@ -43,33 +50,45 @@ class Monitor(object):
         self._tft.text(self._tft.CENTER, 0, 'IMPORTING', self._tft.DARKGREY)
         self._tft.text(self._tft.RIGHT, 0, 'SOLAR', self._tft.DARKGREY)
         self._tft.text(0, 14, 'Loading...', self._tft.DARKGREY)
-        print('Initializing TFT... Done')
+        self._log('Initializing TFT... Done')
     
     def init(self):
-        print('Connecting to wifi...')
+        self._log('Connecting to wifi ({0})... '.format(self._wifi_credentials[0]), tft=True)
         self._wlan = network.WLAN(network.STA_IF)
         self._wlan.active(True)
         self._wlan.connect(*self._wifi_credentials)
-        while not self._wlan.isconnected():
+        safety = 10
+        while not self._wlan.isconnected() and safety > 0:
             time.sleep(1)
-        print('Connecting to wifi... Done')
-        print('Connecting to MQTT...')
+            safety -= 1
+        self._log('Connecting to wifi ({0})... {1}'.format(self._wifi_credentials[0], 'Done' if safety else 'Fail'))
+        self._log('Connecting to MQTT...', tft=True)
         if self._mqtt is not None:
             self._mqtt.unsubscribe('emon/#')
         self._mqtt = network.mqtt('emon', self._mqtt_broker, user='emonpi', password='emonpimqtt2016', data_cb=self._process_data)
         self._mqtt.start()
+        safety = 5
+        while self._mqtt.status()[0] != 2 and safety > 0:
+            time.sleep(1)
+            safety -= 1
         self._mqtt.subscribe('emon/#')
-        print('Connecting to MQTT... Done')
-        print('Sync NTP...')
+        self._log('Connecting to MQTT... {0}'.format('Done' if safety else 'Fail'))
+        self._log('Sync NTP...', tft=True)
         self._rtc.ntp_sync(server='be.pool.ntp.org', tz='CET-1CEST-2')
+        safety = 5
+        while not self._rtc.synced() and safety > 0:
+            time.sleep(1)
+            safety -= 1
         self._last_update = self._rtc.now()
-        print('Sync NTP... Done')
+        self._log('Sync NTP... {0}'.format('Done' if safety else 'Fail'))
+        self._tft.text(0, 14, ' ' * 50, self._tft.DARKGREY)  # Clear the line
     
     def _process_data(self, message):
         topic = message[1]
         data = float(message[2])
+        
         if topic == self._solar_topic:
-            self._solar = data
+            self._solar = max(0, data)
         elif topic == self._grid_topic:
             self._grid = data
         if self._solar is not None and self._grid is not None:
@@ -79,28 +98,29 @@ class Monitor(object):
 
         if topic == self._grid_topic and self._usage is not None:
             now = time.time()
-            if self._last_value_added < (now - now % 60):
+            rounded_now = now - now % self._graph_interval
+            if self._last_value_added < rounded_now:
                 self._solar_buffer.append(self._solar)
                 self._solar_buffer = self._solar_buffer[-320:]
                 self._usage_buffer.append(self._usage)
                 self._usage_buffer = self._usage_buffer[-320:]
-                self._last_value_added = now - now % 60
+                self._last_value_added = rounded_now
                 self._buffer_updated = True
 
     def run(self):
-        self._timer.init(period=1000, mode=Timer.PERIODIC, callback=self._tick)
+        self._timer.init(period=self._update_interval, mode=Timer.PERIODIC, callback=self._tick)
 
     def _tick(self, timer):
         _ = timer
         try:
             self._draw()
         except Exception as ex:
-            print('Exception in draw: {0}'.format(ex))
+            self._log('Exception in draw: {0}'.format(ex))
         try:
             if not self._wlan.isconnected():
                 self.init()
         except Exception as ex:
-            print('Exception in watchdog: {0}'.format(ex))
+            self._log('Exception in watchdog: {0}'.format(ex))
     
     def _draw(self):
         if self._realtime_updated:
@@ -142,7 +162,30 @@ class Monitor(object):
                     self._tft.line(index, 220 - usage_height, index, 220, self._tft.DARKCYAN)
             self._buffer_updated = False
 
-        self._tft.text(0, self._tft.BOTTOM, 'B: {0}% - U: {1}                '.format(
+        self._tft.text(0, self._tft.BOTTOM, 'B: {0}% - U: {1} - W: {2}      '.format(
             self._battery.level,
-            '{0:04d}/{1:02d}/{2:02d} {3:02d}:{4:02d}:{5:02d}'.format(*self._last_update[:6])
+            '{0:04d}/{1:02d}/{2:02d} {3:02d}:{4:02d}:{5:02d}'.format(*self._last_update[:6]),
+            self._graph_window
         ), self._tft.DARKGREY)
+
+    @staticmethod
+    def _shorten(seconds):
+        parts = []
+        seconds_hour = 60 * 60
+        seconds_minute = 60
+        if seconds >= seconds_hour:
+            hours = int((seconds - seconds % seconds_hour) / seconds_hour)
+            seconds = seconds - (hours * seconds_hour)
+            parts.append('{0}h'.format(hours))
+        if seconds >= seconds_minute:
+            minutes = int((seconds - seconds % seconds_minute) / seconds_minute)
+            seconds = seconds - (minutes * seconds_minute)
+            parts.append('{0}m'.format(minutes))
+        if seconds > 0:
+            parts.append('{0}s'.format(seconds))
+        return ' '.join(parts)
+    
+    def _log(self, message, tft=False):
+        print(message)
+        if tft:
+            self._tft.text(0, 14, '{0}{1}'.format(message, ' ' * 50), self._tft.DARKGREY)
