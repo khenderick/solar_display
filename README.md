@@ -49,6 +49,6 @@ All code is licensed under MIT except for files stating differently.
 
 This project uses and/or relies on following software:
 * Loboris ESP32 MicroPython fork;
-* Mika Tuupola's IP5306 I2C driver.
+* Mika Tuupola's IP5306 I2C driver & button wrapper
 
 Let me know if I miss anything.
