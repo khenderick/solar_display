@@ -9,7 +9,7 @@ from buttons import ButtonA, ButtonC
 class Monitor(object):
 
     def __init__(
-        self, 
+        self,
         solar_topic, grid_topic, mqtt_broker, wifi_credentials,
         graph_interval_s=60, update_interval_ms=1000
     ):
@@ -24,7 +24,7 @@ class Monitor(object):
         self._tft = None
         self._wlan = None
         self._mqtt = None
-        
+
         self._battery = IP5306(I2C(scl=Pin(22), sda=Pin(21)))
         self._timer = Timer(0)
         self._rtc = RTC()
@@ -40,13 +40,22 @@ class Monitor(object):
         self._grid_avg_buffer = []
         self._usage_buffer = []
         self._solar_buffer = []
+        self._usage_buffer_max = 0
+        self._solar_buffer_max = 0
         self._last_update = (0, 0, 0, 0, 0, 0)
-        self._data_counter = 0
+        self._data_received = [False, False]
         self._buffer_updated = False
         self._realtime_updated = False
         self._last_value_added = None
+        self._graph_max = 0
         self._menu_horizontal_pointer = 0
         self._blank_menu = False
+        self._ticks = {'M': 0,  # MQTT message
+                       'D': 0,  # Data sample (solar + grid)
+                       'R': 0,  # Remaining time for next graph update
+                       'G': 0,  # Graph datapoint added
+                       'B': 0}  # Button press
+        self._tick_keys = ['M', 'D', 'G', 'B', 'R']
 
         self._log('Initializing TFT...')
         self._tft = display.TFT()
@@ -59,7 +68,7 @@ class Monitor(object):
         self._tft.text(self._tft.RIGHT, 0, 'SOLAR', self._tft.DARKGREY)
         self._tft.text(0, 14, 'Loading...', self._tft.DARKGREY)
         self._log('Initializing TFT... Done')
-    
+
     def init(self):
         """ Init logic; connect to wifi, connect to MQTT and setup RTC/NTP """
         self._log('Connecting to wifi ({0})... '.format(self._wifi_credentials[0]), tft=True)
@@ -94,27 +103,29 @@ class Monitor(object):
         self._last_update = self._rtc.now()
         self._log('Sync NTP... {0}'.format('Done' if safety else 'Fail'))
         self._tft.text(0, 14, ' ' * 50, self._tft.DARKGREY)  # Clear the line
-    
+
     def _process_data(self, message):
         """ Process MQTT message """
         topic = message[1]
         data = float(message[2])
-        
+        self._ticks['M'] += 1
+
         # Collect data samples from solar & grid
         if topic == self._solar_topic:
-            self._solar = max(0, data)
-            self._data_counter += 1
+            self._solar = max(0.0, data)
+            self._data_received[0] = True
         elif topic == self._grid_topic:
             self._grid = data
-            self._data_counter += 1
+            self._data_received[1] = True
 
-        if self._data_counter == 2:
+        if self._data_received[0] and self._data_received[1]:
+            self._ticks['D'] += 1
             # Once the data has been received, calculate realtime usage
             self._usage = self._solar + self._grid
-            
+
             self._last_update = self._rtc.now()
             self._realtime_updated = True  # Redraw realtime values
-            self._data_counter = 0
+            self._data_received = [False, False]
 
             # Process data for the graph; collect solar & grids, and every x-pixel
             # average the data out and draw them on that pixel.
@@ -122,20 +133,33 @@ class Monitor(object):
             rounded_now = now - now % self._graph_interval
             if self._last_value_added is None:
                 self._last_value_added = rounded_now
+            self._ticks['R'] = int(rounded_now + self._graph_interval - now)
             self._solar_avg_buffer.append(self._solar)
             self._grid_avg_buffer.append(self._grid)
             if self._last_value_added != rounded_now and len(self._solar_avg_buffer) > 0:
-                solar = sum(self._solar_avg_buffer) / len(self._solar_avg_buffer)
-                self._solar_avg_buffer = []
-                grid = sum(self._grid_avg_buffer) / len(self._grid_avg_buffer)
-                self._grid_avg_buffer = []
-                usage = solar + grid
+                self._ticks['G'] += 1
+                solar, usage = self._read_avg_buffer(reset=True)
                 self._solar_buffer.append(solar)
-                self._solar_buffer = self._solar_buffer[-320:]
+                self._solar_buffer = self._solar_buffer[-319:]  # Keep one pixel for moving avg
+                self._solar_buffer_max = solar if len(self._solar_buffer) == 1 else max(*self._solar_buffer)
                 self._usage_buffer.append(usage)
-                self._usage_buffer = self._usage_buffer[-320:]
+                self._usage_buffer = self._usage_buffer[-319:]  # Keep one pixel for moving avg
+                self._usage_buffer_max = usage if len(self._usage_buffer) == 1 else max(*self._usage_buffer)
                 self._last_value_added = rounded_now
-                self._buffer_updated = True  # Redraw the graph
+                self._buffer_updated = True  # Redraw the complete graph
+
+    def _read_avg_buffer(self, reset):
+        solar_avg_buffer_length = len(self._solar_avg_buffer)
+        grid_avg_buffer_length = len(self._grid_avg_buffer)
+        if solar_avg_buffer_length == 0 or grid_avg_buffer_length == 0:
+            return 0, 0
+        solar = sum(self._solar_avg_buffer) / solar_avg_buffer_length
+        grid = sum(self._grid_avg_buffer) / grid_avg_buffer_length
+        usage = solar + grid
+        if reset:
+            self._solar_avg_buffer = []
+            self._grid_avg_buffer = []
+        return solar, usage
 
     def run(self):
         """ Set timer """
@@ -155,51 +179,64 @@ class Monitor(object):
                 self.init()
         except Exception as ex:
             self._log('Exception in watchdog: {0}'.format(ex))
-    
+
     def _draw(self):
         """ Update display """
-        if self._realtime_updated:
-            # Realtime part; current usage, importing/exporting and solar
-            self._tft.text(self._tft.RIGHT, 14, '          {0:.2f}W'.format(self._solar), self._tft.YELLOW)
-            self._tft.text(0, 14, '{0:.2f}W          '.format(self._usage), self._tft.BLUE)
-            self._importing = self._grid > 0
-            if self._prev_importing != self._importing:
-                if self._importing:
-                    self._tft.text(self._tft.CENTER, 0, '  IMPORTING  ', self._tft.DARKGREY)
-                else:
-                    self._tft.text(self._tft.CENTER, 0, '  EXPORTING  ', self._tft.DARKGREY)
+        self._draw_realtime()
+        self._draw_graph()
+        self._draw_menu()
+
+    def _draw_realtime(self):
+        """ Realtime part; current usage, importing/exporting and solar """
+        if not self._realtime_updated:
+            return
+
+        self._tft.text(self._tft.RIGHT, 14, '          {0:.2f}W'.format(self._solar), self._tft.YELLOW)
+        self._tft.text(0, 14, '{0:.2f}W          '.format(self._usage), self._tft.BLUE)
+        self._importing = self._grid > 0
+        if self._prev_importing != self._importing:
             if self._importing:
-                self._tft.text(self._tft.CENTER, 14, '  {0:.2f}W  '.format(abs(self._grid)), self._tft.RED)
+                self._tft.text(self._tft.CENTER, 0, '  IMPORTING  ', self._tft.DARKGREY)
             else:
-                self._tft.text(self._tft.CENTER, 14, '  {0:.2f}W  '.format(abs(self._grid)), self._tft.GREEN)
-            self._prev_importing = self._importing
-            self._realtime_updated = False
+                self._tft.text(self._tft.CENTER, 0, '  EXPORTING  ', self._tft.DARKGREY)
+        if self._importing:
+            self._tft.text(self._tft.CENTER, 14, '  {0:.2f}W  '.format(abs(self._grid)), self._tft.RED)
+        else:
+            self._tft.text(self._tft.CENTER, 14, '  {0:.2f}W  '.format(abs(self._grid)), self._tft.GREEN)
+        self._prev_importing = self._importing
+        self._realtime_updated = False
+
+    def _draw_graph(self):
+        """ Draw the graph part """
+        solar_moving_avg, usage_moving_avg = self._read_avg_buffer(reset=False)
+        max_value = float(max(self._solar_buffer_max, self._usage_buffer_max, solar_moving_avg, usage_moving_avg))
+        if max_value != self._graph_max:
+            self._graph_max = max_value
+            self._buffer_updated = True
+        ratio = 180.0 / (1 if max_value == 0 else max_value)
 
         if self._buffer_updated:
-            # If the graph buffers are updated, redraw the graph
-            if len(self._usage_buffer) > 1:
-                max_value = float(max(max(*self._solar_buffer), max(*self._usage_buffer)))
-            else:
-                max_value = float(max(self._solar_buffer[0], self._usage_buffer[0]))
-            ratio = 180.0 / max_value
-
             for index, usage in enumerate(self._usage_buffer):
                 solar = self._solar_buffer[index]
-
-                usage_height = int(usage * ratio)
-                solar_height = int(solar * ratio)
-
-                max_height = max(usage_height, solar_height)
-                self._tft.line(index, 40, index, 220 - max_height, self._tft.BLACK)
-                if usage_height > solar_height:
-                    self._tft.line(index, 220 - usage_height, index, 220 - solar_height, self._tft.BLUE)
-                    self._tft.line(index, 220 - solar_height, index, 220, self._tft.DARKCYAN)
-                else:
-                    self._tft.line(index, 220 - solar_height, index, 220 - usage_height, self._tft.YELLOW)
-                    self._tft.line(index, 220 - usage_height, index, 220, self._tft.DARKCYAN)
+                self._draw_graph_line(index, solar, usage, ratio)
             self._buffer_updated = False
+        self._draw_graph_line(len(self._usage_buffer), solar_moving_avg, usage_moving_avg, ratio)
 
-        # And in any case, update the general information at the bottom
+    def _draw_graph_line(self, index, solar, usage, ratio):
+        usage_height = int(usage * ratio)
+        solar_height = int(solar * ratio)
+        max_height = max(usage_height, solar_height)
+        self._tft.line(index, 40, index, 220 - max_height, self._tft.BLACK)
+        if usage_height > solar_height:
+            self._tft.line(index, 220 - usage_height, index, 220 - solar_height, self._tft.BLUE)
+            if solar_height > 0:
+                self._tft.line(index, 220 - solar_height, index, 220, self._tft.DARKCYAN)
+        else:
+            self._tft.line(index, 220 - solar_height, index, 220 - usage_height, self._tft.YELLOW)
+            if usage_height > 0:
+                self._tft.line(index, 220 - usage_height, index, 220, self._tft.DARKCYAN)
+
+    def _draw_menu(self):
         if self._blank_menu:
             self._tft.rect(0, 221, 320, 240, self._tft.BLACK, self._tft.BLACK)
             self._blank_menu = False
@@ -209,23 +246,31 @@ class Monitor(object):
             data = '  Battery: {0}%  '.format(self._battery.level)
         elif self._menu_horizontal_pointer == 2:
             data = '  Width: {0}  '.format(self._graph_window)
+        elif self._menu_horizontal_pointer == 3:
+            data = '  Graph size: {0}  '.format(len(self._usage_buffer))
+        elif self._menu_horizontal_pointer == 4:
+            data = '  Graph max: {0:.2f}  '.format(self._graph_max)
         else:
-            data = '  Graph entries: {0}  '.format(len(self._usage_buffer))
+            data = '  Ticks: {0}  '.format(', '.join('{0}'.format(self._ticks[key]) for key in self._tick_keys))
         self._tft.text(0, self._tft.BOTTOM, '<', self._tft.DARKGREY)
         self._tft.text(self._tft.RIGHT, self._tft.BOTTOM, '>', self._tft.DARKGREY)
         self._tft.text(self._tft.CENTER, self._tft.BOTTOM, data, self._tft.DARKGREY)
 
     def _button_a_pressed(self, pin, pressed):
+        _ = pin
         if pressed:
+            self._ticks['B'] += 1
             self._menu_horizontal_pointer -= 1
             if self._menu_horizontal_pointer < 0:
-                self._menu_horizontal_pointer = 3
+                self._menu_horizontal_pointer = 5
             self._blank_menu = True
 
     def _button_c_pressed(self, pin, pressed):
+        _ = pin
         if pressed:
+            self._ticks['B'] += 1
             self._menu_horizontal_pointer += 1
-            if self._menu_horizontal_pointer > 3:
+            if self._menu_horizontal_pointer > 5:
                 self._menu_horizontal_pointer = 0
             self._blank_menu = True
 
@@ -246,7 +291,7 @@ class Monitor(object):
         if seconds > 0:
             parts.append('{0}s'.format(seconds))
         return ' '.join(parts)
-    
+
     def _log(self, message, tft=False):
         """ Logs a message to the console and (optionally) to the display """
         print(message)
