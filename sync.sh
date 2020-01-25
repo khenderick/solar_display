@@ -1,2 +1,2 @@
 #!/bin/sh
-rshell --port /dev/ttyUSB0 rsync --mirror . /flash
+rshell --port $1 rsync --mirror . /flash
