@@ -2,7 +2,8 @@ import display
 import network
 import time
 import ubinascii
-from machine import I2C, Pin, Timer, RTC
+from math import sqrt
+from machine import I2C, Pin, Timer, RTC, Neopixel
 from ip5306 import IP5306
 from buttons import ButtonA, ButtonC
 
@@ -25,6 +26,7 @@ class Monitor(object):
         self._tft = None
         self._wlan = None
         self._mqtt = None
+        self._neopixel = None
 
         self._battery = IP5306(I2C(scl=Pin(22), sda=Pin(21)))
         self._timer = Timer(0)
@@ -40,9 +42,15 @@ class Monitor(object):
         self._solar_avg_buffer = []
         self._grid_avg_buffer = []
         self._usage_buffer = []
-        self._solar_buffer = []
         self._usage_buffer_max = 0
+        self._usage_buffer_min = 0
+        self._usage_buffer_avg = 0
+        self._usage_buffer_stddev = 0
+        self._solar_buffer = []
         self._solar_buffer_max = 0
+        self._solar_buffer_min = 0
+        self._solar_buffer_avg = 0
+        self._solar_buffer_stddev = 0
         self._last_update = (0, 0, 0, 0, 0, 0)
         self._data_received = [False, False]
         self._buffer_updated = False
@@ -50,6 +58,8 @@ class Monitor(object):
         self._last_value_added = None
         self._graph_max = 0
         self._menu_horizontal_pointer = 0
+        self._menu_tick = 0
+        self._menu_tick_divider = 0
         self._blank_menu = False
         self._ticks = {'M': 0,  # MQTT message
                        'D': 0,  # Data sample (solar + grid)
@@ -106,6 +116,13 @@ class Monitor(object):
             safety -= 1
         self._last_update = self._rtc.now()
         self._log('Sync NTP... {0}'.format('Done' if safety else 'Fail'))
+        self._log('Initializing Neopixels...', tft=True)
+        try:
+            self._neopixel = Neopixel(Pin(15), 10, Neopixel.TYPE_RGB)
+            self._neopixel.clear()
+        except Exception:
+            self._neopixel = None
+        self._log('Initializing Neopixels... {0}'.format('Available' if self._neopixel is not None else 'Unavailable'))
         self._tft.text(0, 14, ' ' * 50, self._tft.DARKGREY)  # Clear the line
 
     def _process_data(self, message):
@@ -147,9 +164,15 @@ class Monitor(object):
                     self._solar_buffer.append(solar)
                     self._solar_buffer = self._solar_buffer[-319:]  # Keep one pixel for moving avg
                     self._solar_buffer_max = solar if len(self._solar_buffer) == 1 else max(*self._solar_buffer)
+                    self._solar_buffer_min = solar if len(self._solar_buffer) == 1 else min(*self._solar_buffer)
+                    self._solar_buffer_avg = sum(self._solar_buffer) / len(self._solar_buffer)
+                    self._solar_buffer_stddev = Monitor._stddev(self._solar_buffer)
                     self._usage_buffer.append(usage)
                     self._usage_buffer = self._usage_buffer[-319:]  # Keep one pixel for moving avg
                     self._usage_buffer_max = usage if len(self._usage_buffer) == 1 else max(*self._usage_buffer)
+                    self._usage_buffer_min = usage if len(self._usage_buffer) == 1 else min(*self._usage_buffer)
+                    self._usage_buffer_avg = sum(self._usage_buffer) / len(self._usage_buffer)
+                    self._usage_buffer_stddev = Monitor._stddev(self._usage_buffer)
                     self._last_value_added = rounded_now
                     self._buffer_updated = True  # Redraw the complete graph
         except Exception as ex:
@@ -177,13 +200,7 @@ class Monitor(object):
     def _tick(self, timer):
         """ Do stuff at a regular interval """
         _ = timer
-        try:
-            # At avery ticket, update display's relevant parts
-            self._draw()
-        except Exception as ex:
-            self._last_exception = str(ex)
-            self._ticks['E'] += 1
-            self._log('Exception in draw: {0}'.format(ex))
+        self._draw()
         try:
             # At every tick, make sure wifi is still connected
             if not self._wlan.isconnected():
@@ -195,9 +212,59 @@ class Monitor(object):
 
     def _draw(self):
         """ Update display """
-        self._draw_realtime()
-        self._draw_graph()
-        self._draw_menu()
+        try:
+            self._draw_realtime()
+        except Exception as ex:
+            self._last_exception = str(ex)
+            self._ticks['E'] += 1
+            self._log('Exception in draw realtime: {0}'.format(ex))
+        try:
+            self._draw_graph()
+        except Exception as ex:
+            self._last_exception = str(ex)
+            self._ticks['E'] += 1
+            self._log('Exception in draw graph: {0}'.format(ex))
+        try:
+            self._draw_menu()
+        except Exception as ex:
+            self._last_exception = str(ex)
+            self._ticks['E'] += 1
+            self._log('Exception in draw menu: {0}'.format(ex))
+        try:
+            self._draw_rgb()
+        except Exception as ex:
+            self._last_exception = str(ex)
+            self._ticks['E'] += 1
+            self._log('Exception in draw rgb: {0}'.format(ex))
+
+    def _draw_rgb(self):
+        """ Uses the neopixel leds (if available) to indicate how "good" our power consumption is. """
+        if self._neopixel is None:
+            return
+        if len(self._solar_buffer) == 0 or self._usage is None:
+            self._neopixel.clear()
+            return
+
+        high_usage = self._usage > self._usage_buffer_avg + (self._usage_buffer_stddev * 2)
+        if self._grid < 0:
+            # Feeding back to the grid
+            score = 0
+            if self._grid < -500:
+                score += 1
+            if self._grid < -1000:
+                score += 1
+            if high_usage:
+                score -= 1
+            colors = [Neopixel.GREEN, Neopixel.LIME, Neopixel.YELLOW]
+            self._neopixel.set(0, colors[max(0, score)], num=10)
+        else:
+            score = 0
+            if high_usage:
+                score += 1
+            if self._solar == 0:
+                score += 1
+            colors = [Neopixel.BLUE, Neopixel.PURPLE, Neopixel.RED]
+            self._neopixel.set(0, colors[max(0, score)], num=10)
 
     def _draw_realtime(self):
         """ Realtime part; current usage, importing/exporting and solar """
@@ -258,20 +325,46 @@ class Monitor(object):
         elif self._menu_horizontal_pointer == 1:
             data = '  Battery: {0}%  '.format(self._battery.level)
         elif self._menu_horizontal_pointer == 2:
-            data = '  Graph window: {0}  '.format(self._graph_window)
-        elif self._menu_horizontal_pointer == 3:
-            data = '  Graph size: {0}  '.format(len(self._usage_buffer))
-        elif self._menu_horizontal_pointer == 4:
-            data = '  Graph max: {0:.2f}W  '.format(self._graph_max)
+            data = '  Graph: {0} {1}, max {2:.2f}W  '.format(len(self._usage_buffer), self._graph_window, self._graph_max)
+        elif self._menu_horizontal_pointer in [3, 4]:
+            data_type = 'solar' if self._menu_horizontal_pointer == 3 else 'usage'
+            solar, usage = self._read_avg_buffer(reset=False)
+            if self._menu_tick == 0:
+                value = min(
+                    getattr(self, '_{0}_buffer_min'.format(data_type)),
+                    solar if data_type == 'solar' else usage,
+                    self._solar if data_type == 'solar' else self._usage
+                )
+                info = 'min'
+            elif self._menu_tick == 1:
+                value = getattr(self, '_{0}_buffer_avg'.format(data_type))
+                info = 'avg'
+            elif self._menu_tick == 2:
+                value = getattr(self, '_{0}_buffer_avg'.format(data_type)) + (getattr(self, '_{0}_buffer_stddev'.format(data_type)) * 2)
+                info = 'high'
+            else:
+                value = max(
+                    getattr(self, '_{0}_buffer_max'.format(data_type)),
+                    solar if data_type == 'solar' else usage,
+                    self._solar if data_type == 'solar' else self._usage
+                )
+                info = 'max'
+            data = '    {0}{1} stats: {2:.2f}W {3}    '.format(data_type[0].upper(), data_type[1:], value, info)
         elif self._menu_horizontal_pointer == 5:
             data = '  Time: {0}  '.format(time.time())
         elif self._menu_horizontal_pointer == 6:
-            data = '  E: {0}  '.format(self._last_exception[:25])
+            data = '  Exception: {0}  '.format(self._last_exception[:20])
         else:
             data = '  Ticks: {0}  '.format(', '.join('{0}'.format(self._ticks[key]) for key in self._tick_keys))
         self._tft.text(0, self._tft.BOTTOM, '<', self._tft.DARKGREY)
         self._tft.text(self._tft.RIGHT, self._tft.BOTTOM, '>', self._tft.DARKGREY)
         self._tft.text(self._tft.CENTER, self._tft.BOTTOM, data, self._tft.DARKGREY)
+        self._menu_tick_divider += 1
+        if self._menu_tick_divider == 3:  # Increase menu tick every X seconds
+            self._menu_tick += 1
+            if self._menu_tick == 4:
+                self._menu_tick = 0
+            self._menu_tick_divider = 0
 
     def _button_a_pressed(self, pin, pressed):
         _ = pin
@@ -290,6 +383,13 @@ class Monitor(object):
             if self._menu_horizontal_pointer > 7:
                 self._menu_horizontal_pointer = 0
             self._blank_menu = True
+
+    @staticmethod
+    def _stddev(entries):
+        """ returns the standard deviation of lst """
+        avg = sum(entries) / len(entries)
+        variance = sum([(e - avg) ** 2 for e in entries]) / len(entries)
+        return sqrt(variance)
 
     @staticmethod
     def _shorten(seconds):
