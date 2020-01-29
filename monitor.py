@@ -38,6 +38,7 @@ class Monitor(object):
         self._button_c = ButtonC(callback=self._button_c_pressed)
 
         self._update = False
+        self._backup = False
         self._solar = None
         self._usage = None
         self._grid = None
@@ -219,10 +220,16 @@ class Monitor(object):
             self._ticks['E'] += 1
             self._log('Exception in watchdog: {0}'.format(ex))
         if self._update:
-            with open('/flash/backup.json', 'w') as backup_file:
-                backup_file.write(ujson.dumps({'usage_buffer': self._usage_buffer,
-                                               'solar_buffer': self._solar_buffer}))
+            self._take_backup()
             reset()
+        if self._backup:
+            self._take_backup()
+            self._backup = False
+
+    def _take_backup(self):
+        with open('/flash/backup.json', 'w') as backup_file:
+            backup_file.write(ujson.dumps({'usage_buffer': self._usage_buffer,
+                                           'solar_buffer': self._solar_buffer}))
 
     def _draw(self):
         """ Update display """
@@ -369,7 +376,9 @@ class Monitor(object):
         elif self._menu_horizontal_pointer == 6:
             data = '  Exception: {0}  '.format(self._last_exception[:20])
         elif self._menu_horizontal_pointer == 7:
-            data = '  Press B to reboot and update  '
+            data = '     Press B to reboot     '
+        elif self._menu_horizontal_pointer == 8:
+            data = '  Press B to take a backup  '
         else:
             data = '  Ticks: {0}  '.format(', '.join('{0}'.format(self._ticks[key]) for key in self._tick_keys))
         self._tft.text(0, self._tft.BOTTOM, '<', self._tft.DARKGREY)
@@ -388,20 +397,23 @@ class Monitor(object):
             self._ticks['B'] += 1
             self._menu_horizontal_pointer -= 1
             if self._menu_horizontal_pointer < 0:
-                self._menu_horizontal_pointer = 8
+                self._menu_horizontal_pointer = 9
             self._blank_menu = True
 
     def _button_b_pressed(self, pin, pressed):
         _ = pin
-        if pressed and self._menu_horizontal_pointer == 7:
-            self._update = True
+        if pressed:
+            if self._menu_horizontal_pointer == 7:
+                self._update = True
+            if self._menu_horizontal_pointer == 8:
+                self._backup = True
 
     def _button_c_pressed(self, pin, pressed):
         _ = pin
         if pressed:
             self._ticks['B'] += 1
             self._menu_horizontal_pointer += 1
-            if self._menu_horizontal_pointer > 8:
+            if self._menu_horizontal_pointer > 9:
                 self._menu_horizontal_pointer = 0
             self._blank_menu = True
 
