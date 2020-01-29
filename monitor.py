@@ -2,16 +2,18 @@ import display
 import network
 import time
 import ubinascii
+import ujson
 from math import sqrt
-from machine import I2C, Pin, Timer, RTC, Neopixel
+from machine import I2C, Pin, Timer, RTC, Neopixel, reset
 from ip5306 import IP5306
-from buttons import ButtonA, ButtonC
+from buttons import ButtonA, ButtonB, ButtonC
 
 
 class Monitor(object):
 
     def __init__(
         self,
+        usage_buffer, solar_buffer,
         solar_topic, grid_topic, mqtt_broker, wifi_credentials,
         graph_interval_s=60, update_interval_ms=1000
     ):
@@ -32,8 +34,10 @@ class Monitor(object):
         self._timer = Timer(0)
         self._rtc = RTC()
         self._button_a = ButtonA(callback=self._button_a_pressed)
+        self._button_b = ButtonB(callback=self._button_b_pressed)
         self._button_c = ButtonC(callback=self._button_c_pressed)
 
+        self._update = False
         self._solar = None
         self._usage = None
         self._grid = None
@@ -41,16 +45,18 @@ class Monitor(object):
         self._prev_importing = None
         self._solar_avg_buffer = []
         self._grid_avg_buffer = []
-        self._usage_buffer = []
+        self._usage_buffer = usage_buffer
         self._usage_buffer_max = 0
         self._usage_buffer_min = 0
         self._usage_buffer_avg = 0
         self._usage_buffer_stddev = 0
-        self._solar_buffer = []
+        self._calculate_buffer_stats('usage', 0)
+        self._solar_buffer = solar_buffer
         self._solar_buffer_max = 0
         self._solar_buffer_min = 0
         self._solar_buffer_avg = 0
         self._solar_buffer_stddev = 0
+        self._calculate_buffer_stats('solar', 0)
         self._last_update = (0, 0, 0, 0, 0, 0)
         self._data_received = [False, False]
         self._buffer_updated = False
@@ -212,6 +218,11 @@ class Monitor(object):
             self._last_exception = str(ex)
             self._ticks['E'] += 1
             self._log('Exception in watchdog: {0}'.format(ex))
+        if self._update:
+            with open('/flash/backup.json', 'w') as backup_file:
+                backup_file.write(ujson.dumps({'usage_buffer': self._usage_buffer,
+                                               'solar_buffer': self._solar_buffer}))
+            reset()
 
     def _draw(self):
         """ Update display """
@@ -357,6 +368,8 @@ class Monitor(object):
             data = '  Time: {0}  '.format(time.time())
         elif self._menu_horizontal_pointer == 6:
             data = '  Exception: {0}  '.format(self._last_exception[:20])
+        elif self._menu_horizontal_pointer == 7:
+            data = '  Press B to reboot and update  '
         else:
             data = '  Ticks: {0}  '.format(', '.join('{0}'.format(self._ticks[key]) for key in self._tick_keys))
         self._tft.text(0, self._tft.BOTTOM, '<', self._tft.DARKGREY)
@@ -375,15 +388,20 @@ class Monitor(object):
             self._ticks['B'] += 1
             self._menu_horizontal_pointer -= 1
             if self._menu_horizontal_pointer < 0:
-                self._menu_horizontal_pointer = 7
+                self._menu_horizontal_pointer = 8
             self._blank_menu = True
+
+    def _button_b_pressed(self, pin, pressed):
+        _ = pin
+        if pressed and self._menu_horizontal_pointer == 7:
+            self._update = True
 
     def _button_c_pressed(self, pin, pressed):
         _ = pin
         if pressed:
             self._ticks['B'] += 1
             self._menu_horizontal_pointer += 1
-            if self._menu_horizontal_pointer > 7:
+            if self._menu_horizontal_pointer > 8:
                 self._menu_horizontal_pointer = 0
             self._blank_menu = True
 

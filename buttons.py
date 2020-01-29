@@ -15,14 +15,13 @@
 Handle io pin as a digital input.
 """
 
-# pylint: disable=import-error
 import machine
 from machine import Pin
-# pylint: enable=import-error
 
 BUTTON_A_PIN = 39
 BUTTON_B_PIN = 38
 BUTTON_C_PIN = 37
+
 
 class DigitalInput(object):
 
@@ -41,7 +40,6 @@ class DigitalInput(object):
             self._register[0] <<= 1
             self._register[0] |= pin.value()
 
-            #print("{:08b}".format(self._register[0]))
             # All bits set, button has been released for 8 loops
             if self._register[0] is 0b11111111:
                 self._current_state = False
@@ -59,18 +57,20 @@ class DigitalInput(object):
 
         machine.enable_irq(irq_state)
 
+
 class ButtonA(DigitalInput):
     def __init__(self, callback=None, trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING):
         pin = Pin(BUTTON_A_PIN, Pin.IN)
         DigitalInput.__init__(self, pin, callback=callback, trigger=trigger)
+
 
 class ButtonB(DigitalInput):
     def __init__(self, callback=None, trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING):
         pin = Pin(BUTTON_B_PIN, Pin.IN)
         DigitalInput.__init__(self, pin, callback=callback, trigger=trigger)
 
+
 class ButtonC(DigitalInput):
     def __init__(self, callback=None, trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING):
         pin = Pin(BUTTON_C_PIN, Pin.IN)
         DigitalInput.__init__(self, pin, callback=callback, trigger=trigger)
-        
