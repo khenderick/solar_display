@@ -163,22 +163,25 @@ class Monitor(object):
                     solar, usage = self._read_avg_buffer(reset=True)
                     self._solar_buffer.append(solar)
                     self._solar_buffer = self._solar_buffer[-319:]  # Keep one pixel for moving avg
-                    self._solar_buffer_max = solar if len(self._solar_buffer) == 1 else max(*self._solar_buffer)
-                    self._solar_buffer_min = solar if len(self._solar_buffer) == 1 else min(*self._solar_buffer)
-                    self._solar_buffer_avg = sum(self._solar_buffer) / len(self._solar_buffer)
-                    self._solar_buffer_stddev = Monitor._stddev(self._solar_buffer)
+                    self._calculate_buffer_stats('solar', solar)
                     self._usage_buffer.append(usage)
                     self._usage_buffer = self._usage_buffer[-319:]  # Keep one pixel for moving avg
-                    self._usage_buffer_max = usage if len(self._usage_buffer) == 1 else max(*self._usage_buffer)
-                    self._usage_buffer_min = usage if len(self._usage_buffer) == 1 else min(*self._usage_buffer)
-                    self._usage_buffer_avg = sum(self._usage_buffer) / len(self._usage_buffer)
-                    self._usage_buffer_stddev = Monitor._stddev(self._usage_buffer)
+                    self._calculate_buffer_stats('usage', solar)
                     self._last_value_added = rounded_now
                     self._buffer_updated = True  # Redraw the complete graph
         except Exception as ex:
             self._last_exception = str(ex)
             self._ticks['E'] += 1
             self._log('Exception in process data: {0}'.format(ex))
+
+    def _calculate_buffer_stats(self, buffer_type, single_value):
+        buffer = getattr(self, '_{0}_buffer'.format(buffer_type))
+        if len(buffer) == 0:
+            return
+        setattr(self, '_{0}_buffer_max'.format(buffer_type), single_value if len(buffer) == 1 else max(*buffer))
+        setattr(self, '_{0}_buffer_min'.format(buffer_type), single_value if len(buffer) == 1 else min(*buffer))
+        setattr(self, '_{0}_buffer_avg'.format(buffer_type), sum(buffer) / len(buffer))
+        setattr(self, '_{0}_buffer_stddev'.format(buffer_type), Monitor._stddev(buffer))
 
     def _read_avg_buffer(self, reset):
         solar_avg_buffer_length = len(self._solar_avg_buffer)
@@ -293,7 +296,7 @@ class Monitor(object):
         if max_value != self._graph_max:
             self._graph_max = max_value
             self._buffer_updated = True
-        ratio = 180.0 / (1 if max_value == 0 else max_value)
+        ratio = 1 if max_value == 0 else (180.0 / max_value)
 
         if self._buffer_updated:
             for index, usage in enumerate(self._usage_buffer):
