@@ -28,7 +28,7 @@ Optionally, following parameters can also be specified:
 * `update_interval_ms`: How frequent (in ms) the display must be updated;
 * `graph_interval_s`: How frequent (in s) the graph needs to be updated.
 
-Top: A graph interval of `270` seconds is just enough for exactly 24h of data.
+Tip: A graph interval of `270` seconds is just enough for exactly 24h of data.
 
 ### Installation
 
@@ -36,6 +36,14 @@ Top: A graph interval of `270` seconds is just enough for exactly 24h of data.
 2. Soft restart the M5Stack: Open the REPL with `screen /dev/ttyUSB0 115200` and soft restart with `CTRL+D`.
 
 Tip: You can exit the screen by pressing `CTRL+A`, then `k` and then `y`.
+
+### Update
+
+The system supports update via SD card. Format an micro SD card with FAT32 and put the contents
+of this repo in an `update` folder on the SD card's root. Put the SD card in the M5Stack and use
+the `A` and `C` buttons to nativate to the `reboot & update` menu item. Press the `B` button to
+activate. The system will take a backup of the graph, reset the M5Stack, update the code from the
+SD card and load the graph again.
 
 ### Debugging
 
