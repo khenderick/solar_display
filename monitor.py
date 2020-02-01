@@ -68,6 +68,7 @@ class Monitor(object):
         self._menu_tick = 0
         self._menu_tick_divider = 0
         self._blank_menu = False
+        self._color = None
         self._ticks = {'M': 0,  # MQTT message
                        'D': 0,  # Data sample (solar + grid)
                        'R': 0,  # Remaining time for next graph update
@@ -277,7 +278,7 @@ class Monitor(object):
             if high_usage:
                 score -= 1
             colors = [Neopixel.GREEN, Neopixel.LIME, Neopixel.YELLOW]
-            self._neopixel.set(0, colors[max(0, score)], num=10)
+            color = colors[max(0, score)]
         else:
             score = 0
             if high_usage:
@@ -285,7 +286,10 @@ class Monitor(object):
             if self._solar == 0:
                 score += 1
             colors = [Neopixel.BLUE, Neopixel.PURPLE, Neopixel.RED]
-            self._neopixel.set(0, colors[max(0, score)], num=10)
+            color = colors[max(0, score)]
+        if self._color != color:
+            self._neopixel.set(0, color, num=10)
+            self._color = color
 
     def _draw_realtime(self):
         """ Realtime part; current usage, importing/exporting and solar """
