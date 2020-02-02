@@ -51,12 +51,14 @@ class Monitor(object):
         self._usage_buffer_min = 0
         self._usage_buffer_avg = 0
         self._usage_buffer_stddev = 0
+        self._usage_max_coords = [0, 0]
         self._calculate_buffer_stats('usage', 0)
         self._solar_buffer = solar_buffer
         self._solar_buffer_max = 0
         self._solar_buffer_min = 0
         self._solar_buffer_avg = 0
         self._solar_buffer_stddev = 0
+        self._solar_max_coords = [0, 0]
         self._calculate_buffer_stats('solar', 0)
         self._last_update = (0, 0, 0, 0, 0, 0)
         self._data_received = [False, False]
@@ -64,10 +66,13 @@ class Monitor(object):
         self._realtime_updated = False
         self._last_value_added = None
         self._graph_max = 0
+        self._solar_max = 0
+        self._usage_max = 0
         self._menu_horizontal_pointer = 0
         self._menu_tick = 0
         self._menu_tick_divider = 0
         self._blank_menu = False
+        self._show_markers = True
         self._color = None
         self._ticks = {'M': 0,  # MQTT message
                        'D': 0,  # Data sample (solar + grid)
@@ -83,7 +88,7 @@ class Monitor(object):
         self._tft.init(self._tft.M5STACK, width=240, height=320, rst_pin=33, backl_pin=32, miso=19, mosi=23, clk=18, cs=14, dc=27, bgr=True, backl_on=1)
         self._tft.tft_writecmd(0x21)  # Invert colors
         self._tft.clear()
-        self._tft.font(self._tft.FONT_Default)
+        self._tft.font(self._tft.FONT_Default, transparent=False)
         self._tft.text(0, 0, 'USAGE', self._tft.DARKGREY)
         self._tft.text(self._tft.CENTER, 0, 'IMPORTING', self._tft.DARKGREY)
         self._tft.text(self._tft.RIGHT, 0, 'SOLAR', self._tft.DARKGREY)
@@ -174,7 +179,7 @@ class Monitor(object):
                     self._calculate_buffer_stats('solar', solar)
                     self._usage_buffer.append(usage)
                     self._usage_buffer = self._usage_buffer[-319:]  # Keep one pixel for moving avg
-                    self._calculate_buffer_stats('usage', solar)
+                    self._calculate_buffer_stats('usage', usage)
                     self._last_value_added = rounded_now
                     self._buffer_updated = True  # Redraw the complete graph
         except Exception as ex:
@@ -314,43 +319,96 @@ class Monitor(object):
     def _draw_graph(self):
         """ Draw the graph part """
         solar_moving_avg, usage_moving_avg = self._read_avg_buffer(reset=False)
-        max_value = float(max(self._solar_buffer_max, self._usage_buffer_max, solar_moving_avg, usage_moving_avg))
+        solar_max = max(self._solar_buffer_max, solar_moving_avg)
+        usage_max = max(self._usage_buffer_max, usage_moving_avg)
+        max_value = float(max(solar_max, usage_max))
         if max_value != self._graph_max:
             self._graph_max = max_value
             self._buffer_updated = True
+        if solar_max != self._solar_max:
+            self._solar_max = solar_max
+            self._buffer_updated = True
+        if usage_max != self._usage_max:
+            self._usage_max = usage_max
+            self._buffer_updated = True
         ratio = 1 if max_value == 0 else (180.0 / max_value)
+        show_markers = self._show_markers and max_value > 0
+        buffer_size = len(self._usage_buffer)
 
+        usage_max_coords = self._usage_max_coords
+        solar_max_coords = self._solar_max_coords
         if self._buffer_updated:
             for index, usage in enumerate(self._usage_buffer):
                 solar = self._solar_buffer[index]
-                self._draw_graph_line(index, solar, usage, ratio)
-            self._buffer_updated = False
-        self._draw_graph_line(len(self._usage_buffer), solar_moving_avg, usage_moving_avg, ratio)
+                usage_y, solar_y = self._draw_graph_line(index, solar, usage, ratio)
+                if show_markers:
+                    if usage == usage_max:
+                        usage_max_coords = [index, usage_y]
+                    if solar == solar_max:
+                        solar_max_coords = [index, solar_y]
+        usage_y, solar_y = self._draw_graph_line(buffer_size, solar_moving_avg, usage_moving_avg, ratio)
+        if show_markers:
+            if usage_moving_avg == usage_max:
+                usage_max_coords = [buffer_size, usage_y]
+            if solar_moving_avg == solar_max:
+                solar_max_coords = [buffer_size, solar_y]
+
+        max_coords_changed = self._usage_max_coords != usage_max_coords or self._solar_max_coords != solar_max_coords
+        if self._buffer_updated and max_coords_changed:
+            self._tft.rect(buffer_size + 1, 40, 320, 220, self._tft.BLACK, self._tft.BLACK)
+        if show_markers:
+            self._draw_marker('{0:.2f}W'.format(solar_max), solar_max_coords)
+            self._draw_marker('{0:.2f}W'.format(usage_max), usage_max_coords)
+        self._usage_max_coords = usage_max_coords
+        self._solar_max_coords = solar_max_coords
+        self._buffer_updated = False
+
+    def _draw_marker(self, text, coords):
+        x, y = coords
+        if x > 160:
+            text_x = x - self._tft.textWidth(text) - 10
+            line_start_x = x - 2
+            line_end_x = x - 8
+        else:
+            text_x = x + 10
+            line_start_x = x + 2
+            line_end_x = text_x - 2
+        if y > 120:
+            text_y = y - 22
+        else:
+            text_y = y + 10
+        self._tft.font(self._tft.FONT_Default, transparent=True)
+        self._tft.text(text_x, text_y, text, self._tft.DARKGREY)
+        self._tft.line(line_start_x, y, line_end_x, text_y + 6, self._tft.DARKGREY)
+        self._tft.font(self._tft.FONT_Default, transparent=False)
 
     def _draw_graph_line(self, index, solar, usage, ratio):
         usage_height = int(usage * ratio)
         solar_height = int(solar * ratio)
+        usage_y = 220 - usage_height
+        solar_y = 220 - solar_height
         max_height = max(usage_height, solar_height)
         self._tft.line(index, 40, index, 220 - max_height, self._tft.BLACK)
         if usage_height > solar_height:
-            self._tft.line(index, 220 - usage_height, index, 220 - solar_height, self._tft.BLUE)
+            self._tft.line(index, usage_y, index, solar_y, self._tft.BLUE)
             if solar_height > 0:
-                self._tft.line(index, 220 - solar_height, index, 220, self._tft.DARKCYAN)
+                self._tft.line(index, solar_y, index, 220, self._tft.DARKCYAN)
         else:
-            self._tft.line(index, 220 - solar_height, index, 220 - usage_height, self._tft.YELLOW)
+            self._tft.line(index, solar_y, index, usage_y, self._tft.YELLOW)
             if usage_height > 0:
-                self._tft.line(index, 220 - usage_height, index, 220, self._tft.DARKCYAN)
+                self._tft.line(index, usage_y, index, 220, self._tft.DARKCYAN)
+        return usage_y, solar_y
 
     def _draw_menu(self):
         if self._blank_menu:
             self._tft.rect(0, 221, 320, 240, self._tft.BLACK, self._tft.BLACK)
             self._blank_menu = False
         if self._menu_horizontal_pointer == 0:
-            data = '  Updated:  {0:04d}/{1:02d}/{2:02d} {3:02d}:{4:02d}:{5:02d}  '.format(*self._last_update[:6])
+            data = 'Updated:  {0:04d}/{1:02d}/{2:02d} {3:02d}:{4:02d}:{5:02d}'.format(*self._last_update[:6])
         elif self._menu_horizontal_pointer == 1:
-            data = '  Battery: {0}%  '.format(self._battery.level)
+            data = 'Battery: {0}%'.format(self._battery.level)
         elif self._menu_horizontal_pointer == 2:
-            data = '  Graph: {0} {1}, max {2:.2f}W  '.format(len(self._usage_buffer), self._graph_window, self._graph_max)
+            data = 'Graph: {0} {1}, max {2:.2f}W'.format(len(self._usage_buffer), self._graph_window, self._graph_max)
         elif self._menu_horizontal_pointer in [3, 4]:
             data_type = 'solar' if self._menu_horizontal_pointer == 3 else 'usage'
             solar, usage = self._read_avg_buffer(reset=False)
@@ -374,19 +432,24 @@ class Monitor(object):
                     self._solar if data_type == 'solar' else self._usage
                 )
                 info = 'max'
-            data = '    {0}{1} stats: {2:.2f}W {3}    '.format(data_type[0].upper(), data_type[1:], value, info)
+            data = '{0}{1} stats: {2:.2f}W {3}'.format(data_type[0].upper(), data_type[1:], value, info)
         elif self._menu_horizontal_pointer == 5:
-            data = '  Time: {0}  '.format(time.time())
+            data = 'Time: {0}'.format(time.time())
         elif self._menu_horizontal_pointer == 6:
-            data = '  Exception: {0}  '.format(self._last_exception[:20])
+            data = 'Exception: {0}'.format(self._last_exception[:20])
         elif self._menu_horizontal_pointer == 7:
-            data = '     Press B to reboot     '
+            data = 'Press B to reboot'
         elif self._menu_horizontal_pointer == 8:
-            data = '  Press B to take a backup  '
+            data = 'Press B to take a backup'
+        elif self._menu_horizontal_pointer == 9:
+            data = 'Press B to show/hide markers'
         else:
-            data = '  Ticks: {0}  '.format(', '.join('{0}'.format(self._ticks[key]) for key in self._tick_keys))
+            data = 'Ticks: {0}'.format(', '.join('{0}'.format(self._ticks[key]) for key in self._tick_keys))
         self._tft.text(0, self._tft.BOTTOM, '<', self._tft.DARKGREY)
         self._tft.text(self._tft.RIGHT, self._tft.BOTTOM, '>', self._tft.DARKGREY)
+        if len(data) < 32:
+            padding = int(float(32 - len(data) + 1) / 2)
+            data = '{0}{1}{2}'.format(' ' * padding, data, ' ' * padding)
         self._tft.text(self._tft.CENTER, self._tft.BOTTOM, data, self._tft.DARKGREY)
         self._menu_tick_divider += 1
         if self._menu_tick_divider == 3:  # Increase menu tick every X seconds
@@ -401,7 +464,7 @@ class Monitor(object):
             self._ticks['B'] += 1
             self._menu_horizontal_pointer -= 1
             if self._menu_horizontal_pointer < 0:
-                self._menu_horizontal_pointer = 9
+                self._menu_horizontal_pointer = 10
             self._blank_menu = True
 
     def _button_b_pressed(self, pin, pressed):
@@ -409,15 +472,17 @@ class Monitor(object):
         if pressed:
             if self._menu_horizontal_pointer == 7:
                 self._update = True
-            if self._menu_horizontal_pointer == 8:
+            elif self._menu_horizontal_pointer == 8:
                 self._backup = True
+            elif self._menu_horizontal_pointer == 9:
+                self._show_markers = not self._show_markers
 
     def _button_c_pressed(self, pin, pressed):
         _ = pin
         if pressed:
             self._ticks['B'] += 1
             self._menu_horizontal_pointer += 1
-            if self._menu_horizontal_pointer > 9:
+            if self._menu_horizontal_pointer > 10:
                 self._menu_horizontal_pointer = 0
             self._blank_menu = True
 
