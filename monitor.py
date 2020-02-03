@@ -3,8 +3,10 @@ import network
 import time
 import ubinascii
 import ujson
+import os
+import machine
 from math import sqrt
-from machine import I2C, Pin, Timer, RTC, Neopixel, reset
+from machine import I2C, Pin, Timer, RTC, Neopixel
 from ip5306 import IP5306
 from buttons import ButtonA, ButtonB, ButtonC
 
@@ -13,7 +15,6 @@ class Monitor(object):
 
     def __init__(
         self,
-        usage_buffer, solar_buffer,
         solar_topic, grid_topic, mqtt_broker, wifi_credentials,
         graph_interval_s=60, update_interval_ms=1000
     ):
@@ -37,7 +38,7 @@ class Monitor(object):
         self._button_b = ButtonB(callback=self._button_b_pressed)
         self._button_c = ButtonC(callback=self._button_c_pressed)
 
-        self._update = False
+        self._reboot = False
         self._backup = False
         self._solar = None
         self._usage = None
@@ -46,14 +47,14 @@ class Monitor(object):
         self._prev_importing = None
         self._solar_avg_buffer = []
         self._grid_avg_buffer = []
-        self._usage_buffer = usage_buffer
+        self._usage_buffer = []
         self._usage_buffer_max = 0
         self._usage_buffer_min = 0
         self._usage_buffer_avg = 0
         self._usage_buffer_stddev = 0
         self._usage_max_coords = [0, 0]
         self._calculate_buffer_stats('usage', 0)
-        self._solar_buffer = solar_buffer
+        self._solar_buffer = []
         self._solar_buffer_max = 0
         self._solar_buffer_min = 0
         self._solar_buffer_avg = 0
@@ -72,6 +73,7 @@ class Monitor(object):
         self._menu_tick = 0
         self._menu_tick_divider = 0
         self._blank_menu = False
+        self._save = False
         self._show_markers = True
         self._color = None
         self._ticks = {'M': 0,  # MQTT message
@@ -82,6 +84,7 @@ class Monitor(object):
                        'E': 0}  # Exceptions
         self._tick_keys = ['M', 'D', 'G', 'B', 'R', 'E']
         self._last_exception = 'None'
+        self._runtime_config_parameters = ['show_markers']
 
         self._log('Initializing TFT...')
         self._tft = display.TFT()
@@ -209,6 +212,26 @@ class Monitor(object):
             self._grid_avg_buffer = []
         return solar, usage
 
+    def load(self):
+        self._log('Loading runtime configuration...', tft=True)
+        if 'runtime_config.json' in os.listdir('/flash'):
+            with open('/flash/runtime_config.json', 'r') as f:
+                runtime_config = ujson.load(f)
+            for key in self._runtime_config_parameters:
+                if key in runtime_config:
+                    setattr(self, '_{0}'.format(key), runtime_config[key])
+        self._log('Loading runtime configuration... Done', tft=True)
+        self._log('Restoring backup...', tft=True)
+        if 'backup.json' in os.listdir('/flash'):
+            with open('/flash/backup.json', 'r') as f:
+                backup = ujson.load(f)
+            self._usage_buffer = backup.get('usage_buffer', [])
+            self._calculate_buffer_stats('usage', 0)
+            self._solar_buffer = backup.get('solar_buffer', [])
+            self._calculate_buffer_stats('solar', 0)
+            os.remove('/flash/backup.json')
+        self._log('Restoring backup... Done', tft=True)
+
     def run(self):
         """ Set timer """
         self._timer.init(period=self._update_interval, mode=Timer.PERIODIC, callback=self._tick)
@@ -225,12 +248,24 @@ class Monitor(object):
             self._last_exception = str(ex)
             self._ticks['E'] += 1
             self._log('Exception in watchdog: {0}'.format(ex))
-        if self._update:
+        if self._reboot:
             self._take_backup()
-            reset()
+            self._save_runtime_config()
+            machine.reset()
         if self._backup:
             self._take_backup()
+            self._save_runtime_config()
             self._backup = False
+        if self._save:
+            self._save_runtime_config()
+            self._save = False
+
+    def _save_runtime_config(self):
+        data = {}
+        for key in self._runtime_config_parameters:
+            data[key] = getattr(self, '_{0}'.format(key))
+        with open('/flash/runtime_config.json', 'w') as runtime_config_file:
+            runtime_config_file.write(ujson.dumps(data))
 
     def _take_backup(self):
         with open('/flash/backup.json', 'w') as backup_file:
@@ -341,24 +376,22 @@ class Monitor(object):
             for index, usage in enumerate(self._usage_buffer):
                 solar = self._solar_buffer[index]
                 usage_y, solar_y = self._draw_graph_line(index, solar, usage, ratio)
-                if show_markers:
-                    if usage == usage_max:
-                        usage_max_coords = [index, usage_y]
-                    if solar == solar_max:
-                        solar_max_coords = [index, solar_y]
+                if usage == usage_max:
+                    usage_max_coords = [index, usage_y]
+                if solar == solar_max:
+                    solar_max_coords = [index, solar_y]
         usage_y, solar_y = self._draw_graph_line(buffer_size, solar_moving_avg, usage_moving_avg, ratio)
-        if show_markers:
-            if usage_moving_avg == usage_max:
-                usage_max_coords = [buffer_size, usage_y]
-            if solar_moving_avg == solar_max:
-                solar_max_coords = [buffer_size, solar_y]
+        if usage_moving_avg == usage_max:
+            usage_max_coords = [buffer_size, usage_y]
+        if solar_moving_avg == solar_max:
+            solar_max_coords = [buffer_size, solar_y]
 
         max_coords_changed = self._usage_max_coords != usage_max_coords or self._solar_max_coords != solar_max_coords
         if self._buffer_updated and max_coords_changed:
             self._tft.rect(buffer_size + 1, 40, 320, 220, self._tft.BLACK, self._tft.BLACK)
         if show_markers:
-            self._draw_marker('{0:.2f}W'.format(solar_max), solar_max_coords)
-            self._draw_marker('{0:.2f}W'.format(usage_max), usage_max_coords)
+            self._draw_marker('{0:.0f}W'.format(solar_max), solar_max_coords)
+            self._draw_marker('{0:.0f}W'.format(usage_max), usage_max_coords)
         self._usage_max_coords = usage_max_coords
         self._solar_max_coords = solar_max_coords
         self._buffer_updated = False
@@ -442,7 +475,7 @@ class Monitor(object):
         elif self._menu_horizontal_pointer == 8:
             data = 'Press B to take a backup'
         elif self._menu_horizontal_pointer == 9:
-            data = 'Press B to show/hide markers'
+            data = 'Press B to {0} markers'.format('hide' if self._show_markers else 'show')
         else:
             data = 'Ticks: {0}'.format(', '.join('{0}'.format(self._ticks[key]) for key in self._tick_keys))
         self._tft.text(0, self._tft.BOTTOM, '<', self._tft.DARKGREY)
@@ -471,11 +504,12 @@ class Monitor(object):
         _ = pin
         if pressed:
             if self._menu_horizontal_pointer == 7:
-                self._update = True
+                self._reboot = True
             elif self._menu_horizontal_pointer == 8:
                 self._backup = True
             elif self._menu_horizontal_pointer == 9:
                 self._show_markers = not self._show_markers
+                self._save = True
 
     def _button_c_pressed(self, pin, pressed):
         _ = pin

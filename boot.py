@@ -7,6 +7,7 @@ UPDATE_FOLDER = '{0}/update'.format(SD_FOLDER)
 FLASH_FILE = '{0}/{{0}}'.format(FLASH_FOLDER)
 UPDATE_FILE = '{0}/{{0}}'.format(UPDATE_FOLDER)
 BACKUP_FILE = 'backup.json'
+RUNTIME_CONFIG_FILE = 'runtime_config.json'
 
 
 def _try_update():
@@ -23,7 +24,7 @@ def _try_update():
         return
     print('Update folder found. Updating...')
     for filename in os.listdir(FLASH_FOLDER):
-        if filename == BACKUP_FILE:
+        if filename in [BACKUP_FILE, RUNTIME_CONFIG_FILE]:
             continue
         os.remove(filename)
         print('- removed {0}'.format(filename))
