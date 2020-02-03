@@ -370,6 +370,7 @@ class Monitor(object):
         show_markers = self._show_markers and max_value > 0
         buffer_size = len(self._usage_buffer)
 
+        avg_marker = False
         usage_max_coords = self._usage_max_coords
         solar_max_coords = self._solar_max_coords
         if self._buffer_updated:
@@ -382,21 +383,23 @@ class Monitor(object):
                     solar_max_coords = [index, solar_y]
         usage_y, solar_y = self._draw_graph_line(buffer_size, solar_moving_avg, usage_moving_avg, ratio)
         if usage_moving_avg == usage_max:
+            avg_marker = True
             usage_max_coords = [buffer_size, usage_y]
         if solar_moving_avg == solar_max:
+            avg_marker = True
             solar_max_coords = [buffer_size, solar_y]
 
         max_coords_changed = self._usage_max_coords != usage_max_coords or self._solar_max_coords != solar_max_coords
         if self._buffer_updated and max_coords_changed:
             self._tft.rect(buffer_size + 1, 40, 320, 220, self._tft.BLACK, self._tft.BLACK)
         if show_markers:
-            self._draw_marker('{0:.0f}W'.format(solar_max), solar_max_coords)
-            self._draw_marker('{0:.0f}W'.format(usage_max), usage_max_coords)
+            self._draw_marker('{0:.0f}W'.format(solar_max), solar_max_coords, not avg_marker)
+            self._draw_marker('{0:.0f}W'.format(usage_max), usage_max_coords, not avg_marker)
         self._usage_max_coords = usage_max_coords
         self._solar_max_coords = solar_max_coords
         self._buffer_updated = False
 
-    def _draw_marker(self, text, coords):
+    def _draw_marker(self, text, coords, transparent):
         x, y = coords
         if x > 160:
             text_x = x - self._tft.textWidth(text) - 10
@@ -410,10 +413,10 @@ class Monitor(object):
             text_y = y - 22
         else:
             text_y = y + 10
-        self._tft.font(self._tft.FONT_Default, transparent=True)
+        self._tft.font(self._tft.FONT_Default, transparent=transparent)
         self._tft.text(text_x, text_y, text, self._tft.DARKGREY)
         self._tft.line(line_start_x, y, line_end_x, text_y + 6, self._tft.DARKGREY)
-        self._tft.font(self._tft.FONT_Default, transparent=False)
+        self._tft.font(self._tft.FONT_Default, transparent=transparent)
 
     def _draw_graph_line(self, index, solar, usage, ratio):
         usage_height = int(usage * ratio)
