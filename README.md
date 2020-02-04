@@ -51,7 +51,7 @@ When the REPL is open, do a soft restart and watch the debug output. It might gi
 
 ### License
 
-All code is licensed under MIT except for files stating differently.
+All code is licensed under AGPL 3.0 except for files stating differently.
 
 ### Notices
 
