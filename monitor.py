@@ -416,7 +416,7 @@ class Monitor(object):
         self._tft.font(self._tft.FONT_Default, transparent=transparent)
         self._tft.text(text_x, text_y, text, self._tft.DARKGREY)
         self._tft.line(line_start_x, y, line_end_x, text_y + 6, self._tft.DARKGREY)
-        self._tft.font(self._tft.FONT_Default, transparent=transparent)
+        self._tft.font(self._tft.FONT_Default, transparent=False)
 
     def _draw_graph_line(self, index, solar, usage, ratio):
         usage_height = int(usage * ratio)
