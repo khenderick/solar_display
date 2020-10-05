@@ -100,6 +100,7 @@ class Monitor(object):
         self._tick_keys = ['M', 'D', 'G', 'B', 'R', 'E']
         self._last_exception = 'None'
         self._runtime_config_parameters = ['show_markers']
+        self._last_logline = ''
 
         self._log('Initializing TFT...')
         self._tft = display.TFT()
@@ -494,6 +495,11 @@ class Monitor(object):
             data = 'Press B to take a backup'
         elif self._menu_horizontal_pointer == 9:
             data = 'Press B to {0} markers'.format('hide' if self._show_markers else 'show')
+        elif self._menu_horizontal_pointer == 10:
+            log_entry = self._last_logline[:26]
+            if len(log_entry) < 26:
+                log_entry += ' ' * (26 - len(log_entry))
+            data = 'Log: {0}'.format(log_entry)
         else:
             data = 'Ticks: {0}'.format(', '.join('{0}'.format(self._ticks[key]) for key in self._tick_keys))
         self._tft.text(0, self._tft.BOTTOM, '<', self._tft.DARKGREY)
@@ -515,7 +521,7 @@ class Monitor(object):
             self._ticks['B'] += 1
             self._menu_horizontal_pointer -= 1
             if self._menu_horizontal_pointer < 0:
-                self._menu_horizontal_pointer = 10
+                self._menu_horizontal_pointer = 11
             self._blank_menu = True
 
     def _button_b_pressed(self, pin, pressed):
@@ -534,7 +540,7 @@ class Monitor(object):
         if pressed:
             self._ticks['B'] += 1
             self._menu_horizontal_pointer += 1
-            if self._menu_horizontal_pointer > 10:
+            if self._menu_horizontal_pointer > 11:
                 self._menu_horizontal_pointer = 0
             self._blank_menu = True
 
@@ -566,5 +572,6 @@ class Monitor(object):
     def _log(self, message, tft=False):
         """ Logs a message to the console and (optionally) to the display """
         print(message)
+        self._last_logline = message
         if tft:
             self._tft.text(0, 14, '{0}{1}'.format(message, ' ' * 50), self._tft.DARKGREY)
